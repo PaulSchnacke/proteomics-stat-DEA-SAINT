@@ -1,0 +1,7 @@
+file	sample	sample_name	condition	replicate
+20260211_002_C41079_S1100212_Beads1_Group_2.mzML	Beads_1	Beads_1	Beads	1
+20260211_008_C41079_S1100213_Beads2_Group_2.mzML	Beads_2	Beads_2	Beads	2
+20260211_005_C41079_S1100214_Beads3_Group_2.mzML	Beads_3	Beads_3	Beads	3
+20260211_003_C41079_S1100209_NosH1_Group_1.mzML	NosH_1	NosH_1	NosH	1
+20260211_004_C41079_S1100210_NosH2_Group_1.mzML	NosH_2	NosH_2	NosH	2
+20260211_007_C41079_S1100211_NosH3_Group_1.mzML	NosH_3	NosH_3	NosH	3
