@@ -1,0 +1,147 @@
+---
+title: "Protein Signal Intensities within Groups"
+date: "2023-03-28"
+author : "The CompMS team"
+editor_options: 
+  chunk_output_type: console
+params:
+  pap: NULL
+  factors: FALSE
+  project_info: NULL
+output:
+  bookdown::html_document2:
+    toc: yes
+    toc_depth: 2
+---
+
+
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(dplyr)
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 6.5,
+  fig.height = 6.5,
+  fig.align = "center",
+  fig.pos = "H"
+)
+
+pap <- params$pap
+lfqdataProt <-  pap$lfqdata_prot
+tableconfig <- pap$lfqdata_prot$config$table
+factors <- params$factors
+project_info <- params$project_info
+
+```
+
+
+- Order : `r project_info$order_Id`
+- Workunit : `r project_info$workunit_Id`
+
+```{r hierachycountspersample, fig.cap="Number of proteins per Sample."}
+srs <- lfqdataProt$get_Summariser()
+srs$plot_hierarchy_counts_sample()
+```
+
+```{r createPlot}
+protID = tableconfig$hierarchy_keys_depth()
+
+precabund <- pap$get_protein_per_group_abundance()
+if (!factors) {
+  precabund <- dplyr::filter(precabund , !!sym(tableconfig$factor_keys()[1]) == "ALL")
+}
+
+
+
+pp <- prolfquapp::plot_abundance_vs_percent(
+  precabund,
+  cfg_table = tableconfig,
+  top_N = NULL,
+  factors = factors,
+  colors = c("^zz" = "red","Y-FGCZ" = "red"),
+  columnAb = "abundance_percent",
+  alpha = 0.4, logY = TRUE)
+pp <- plotly::ggplotly(pp)
+```
+
+
+```{r createDT}
+precabund_table <- pap$get_protein_per_group_small_wide()
+datax <- crosstalk::SharedData$new(as.data.frame(precabund_table) , key = as.formula(paste(" ~ ", protID )), group = "BB")
+
+table <- DT::datatable(
+  datax,
+  filter = "bottom",
+  extensions = "Scroller",
+  style = "auto",
+  class = "compact",
+  options = list(deferRender = TRUE,
+                 scrollY = 300,
+                 scrollX = 400,
+                 scroller = TRUE))
+
+
+```
+
+The columns of the table below contains:
+
+- protein_Id - protein identifier
+- nrPeptides - nr of peptides per protein
+- description - protein description from fasta header
+- nrMeasured_<GroupName> - How often a protein was observed in each of the groups and overall
+- meanAbundance_<GroupName> - average protein abundance (see 1. at the bottom of the document) per group.
+- signal_percent_<GroupName> - percent of the total signal of all identified proteins measured by the mass spectrometric instrument attributed to each protein.
+
+
+
+
+
+```{r}
+table
+```
+
+
+(ref:proteinCumulative) The Y axis presents the percentage of the iBAQ (intensity Based Absolute Quantitation) of each protein. Along the X axis, proteins are organized in ascending order according to their signal proportions. 
+
+
+Calculating the iBAQ signal per protein involves summing the `Precursor.Quantity` values across all precursors associated with that protein and dividing by the number of theoretically observable peptides of the protein. An intriguing observation is that a significant share of the mass spectrometers recorded signal (Y-axis) is allocated to a limited set of highly abundant proteins. Notably, when the most abundant proteins correspond to entities like the cleavage enzyme, typical contaminants such as human keratins, or the bait protein, this situation could indicate shortcomings in the sample processing.
+
+
+```{r proteinCumulative, fig.cap = "(ref:proteinCumulative)"}
+pp
+```
+
+
+
+```{r prepPeptidePlot, eval = FALSE, include=FALSE}
+precabund <- pap$get_protein_per_group_abundance_with_row_annot()
+datax <- crosstalk::SharedData$new(as.data.frame(precabund) , key = as.formula(paste(" ~ ", protID )), group = "BB")
+
+colors = c("^zz" = "red", "Y-FGCZ" = "red")
+colorV <- rep("black", nrow(precabund))
+for (i in seq_along(colors)) {
+  colorV[grepl(names(colors)[i], precabund[[protID]])] <- colors[i]
+}
+group <- tableconfig$factor_keys_depth()
+pplotPepAbund <- ggplot(datax,
+                        aes(x = nrPeptides, y = meanAbundance,
+                            label = !!rlang::sym(protID))) + geom_point(color = colorV, alpha = 0.4) +
+  ggplot2::scale_y_continuous(trans = 'log10') +
+  ggplot2::scale_x_continuous(trans = 'log10') +
+  if (factors) {facet_wrap(as.formula(paste0("~", paste(group, collapse = " + "))))}
+
+pplotPepAbund <- plotly::ggplotly(pplotPepAbund)
+```
+
+(ref:nrProtplots) Mean protein abundance per group (column meanAbundance_<GroupName>) as a function of the number of peptides (column nrPeptides).
+
+```{r nrProtplots, fig.cap = "(ref:nrProtplots)", eval = FALSE, include=FALSE}
+pplotPepAbund
+```
+
+
+
+

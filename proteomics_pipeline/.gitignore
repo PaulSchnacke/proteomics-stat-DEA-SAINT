@@ -1,0 +1,96 @@
+# ==============================================================================
+# .gitignore — AP-MS Pipeline (R / Proteomics)
+# ==============================================================================
+
+# ---- Large data files --------------------------------------------------------
+# DiaNN reports, raw mass spec data, archives
+*.tsv
+*.raw
+*.d/
+*.zip
+
+# FASTA databases (large; users provide their own)
+*.fasta
+*.fa
+# Exception: keep a small template FASTA if present
+!proteins_template.fasta
+
+# ---- SAINTexpress binaries ---------------------------------------------------
+SAINTexpress-int
+SAINTexpress-spc
+SAINTexpress-int.exe
+SAINTexpress-spc.exe
+
+# ---- Pipeline output directories ---------------------------------------------
+output_qc/
+output_dea_*/
+Clocal*/
+ClocalWUlocal/
+
+# Generated YAML configs (created at runtime)
+local_config_*.yaml
+
+# SAINTexpress intermediate files
+inter.txt
+prey.txt
+bait.txt
+list.txt
+
+# ---- R artifacts & IDE -------------------------------------------------------
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+rsconnect/
+
+# Rmd knitting artifacts
+*_cache/
+*_files/
+*.knit.md
+*.utf8.md
+
+# Serialized R objects
+*.rds
+*.RDS
+
+# ---- Dataset & config with private paths -------------------------------------
+# The shipped config.yaml contains FGCZ-internal paths — do NOT commit.
+# Provide a config_template.yaml for users instead.
+config.yaml
+minimal.yaml
+
+# Dataset CSVs may contain internal file paths — exclude real ones.
+# Keep template/example files by naming them *_template.csv or *_example*.csv.
+dataset.csv
+*dataset*.csv
+!*_template.csv
+!*_example*.csv
+!datasetexample_report_truncated.csv
+
+# ---- Rendered reports --------------------------------------------------------
+*.html
+
+# ---- OS junk -----------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Temporary / editor files ------------------------------------------------
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# R logs and build artifacts
+*.log
+lib/
+bin/
+
+# Archive files
+*.tar.gz
+*.7z
+
+# macOS specific (if working cross-platform)
+.AppleDouble
+.LSOverride
