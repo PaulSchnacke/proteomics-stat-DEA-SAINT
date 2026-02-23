@@ -156,6 +156,21 @@ log_info("  FC threshold:   ", REPORTDATA$FCthreshold)
 log_info("  BFDR threshold: ", REPORTDATA$FDRthreshold)
 log_info("  spc mode:       ", REPORTDATA$spc)
 
+# Override from GUI parameters if gui_params.yaml exists
+GUI_PARAMS <- list(contrast_direction = "bait_vs_control")
+gui_params_file <- file.path(target_dir, "gui_params.yaml")
+if (file.exists(gui_params_file)) {
+  gui_p <- yaml::read_yaml(gui_params_file)
+  if (!is.null(gui_p$nr_peptides)) {
+    REPORTDATA$nrPeptides <- as.integer(gui_p$nr_peptides)
+    log_info("  [GUI] nrPeptides overridden to: ", REPORTDATA$nrPeptides)
+  }
+  if (!is.null(gui_p$contrast_direction)) {
+    GUI_PARAMS$contrast_direction <- gui_p$contrast_direction
+    log_info("  [GUI] Contrast direction: ", GUI_PARAMS$contrast_direction)
+  }
+}
+
 
 # ==============================================================================
 # STEP A: Discover inputs & setup
@@ -197,7 +212,7 @@ prolfquasaint::copy_SAINT_express(run_script = FALSE)
 log_ok("SAINTexpress Rmd template and bibliography copied")
 
 # Output directory
-ZIPDIR <- paste0("C", BFABRIC$orderID, "WU", BFABRIC$workunitID)
+ZIPDIR <- "results_SAINT"
 if (dir.exists(ZIPDIR)) {
   log_info("SAINTexpress output directory exists — will overwrite: ", ZIPDIR)
 }
@@ -242,6 +257,24 @@ if ("Grouping.Var" %in% colnames(annot)) {
   log_info("Sample groups: ", paste(unique(annot[[gv_col]]), collapse = ", "))
 }
 
+# Ensure G_ column exists (prolfqua expects this for group-based contrasts)
+if (!"G_" %in% colnames(annot)) {
+  gv_col <- NULL
+  for (col in colnames(annot)) {
+    if (tolower(col) %in% c("grouping.var", "grouping_var", "groupingvar")) {
+      gv_col <- col
+      break
+    }
+  }
+  if (!is.null(gv_col)) {
+    annot$G_ <- annot[[gv_col]]
+    log_ok("Created G_ column from ", gv_col, " (", length(unique(annot$G_)), " groups)")
+  } else {
+    log_warn("No Grouping.Var column found — G_ column NOT created. PCA/Volcano plots may be missing.")
+  }
+} else {
+  log_ok("G_ column already present in dataset")
+}
 
 # ==============================================================================
 # STEP C: Read DiaNN output & FASTA
@@ -606,6 +639,7 @@ REPORTDATA$lfqdata_transformed <- lfqdata_transformed
 REPORTDATA$sig <- sig
 REPORTDATA$resContrasts <- resContrasts
 REPORTDATA$prot_annot <- dplyr::rename(prot_annot$row_annot, protein = protein_Id)
+REPORTDATA$contrast_direction <- GUI_PARAMS$contrast_direction
 
 # Save REPORTDATA for potential re-rendering
 saveRDS(REPORTDATA, file = "REPORTDATA.rds")
@@ -651,7 +685,8 @@ if (is.null(rmd_path)) {
   rm(list = setdiff(ls(), c(
     "SEP", "REPORTDATA", "ZIPDIR", "treat",
     "BFABRIC", "target_dir", "rmd_path",
-    "text", "fileNameHTML", "log_info", "log_ok"
+    "text", "fileNameHTML", "log_info", "log_ok",
+    "log_section", "log_warn", "GUI_PARAMS"
   )))
 
   rmarkdown::render(

@@ -11,6 +11,7 @@
 
 library(shiny)
 library(yaml)
+library(DT)
 
 # Resolve HOME_DIR — the directory where app.R lives
 HOME_DIR <- normalizePath(dirname(sys.frame(1)$ofile %||% "."), mustWork = FALSE)
@@ -18,6 +19,8 @@ if (!file.exists(file.path(HOME_DIR, "run_pipeline.R"))) {
     HOME_DIR <- getwd()
 }
 
+# Increase file upload limit to 5 GB (adjust the number if your files are larger)
+options(shiny.maxRequestSize = 5000 * 1024^2)
 # ==============================================================================
 # UI
 # ==============================================================================
@@ -240,6 +243,97 @@ ui <- fluidPage(
         font-weight: 500;
       }
 
+      /* ---- Editable sample table ---- */
+      .sample-table-container table.dataTable {
+        background: transparent !important;
+        color: #e0e0e0 !important;
+        border-collapse: collapse !important;
+      }
+      .sample-table-container table.dataTable thead th {
+        background: rgba(102, 126, 234, 0.15) !important;
+        color: #a78bfa !important;
+        border-bottom: 1px solid rgba(255,255,255,0.1) !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        padding: 10px 12px !important;
+      }
+      .sample-table-container table.dataTable tbody td {
+        background: transparent !important;
+        color: #e0e0e0 !important;
+        border-bottom: 1px solid rgba(255,255,255,0.05) !important;
+        padding: 8px 12px !important;
+        font-size: 13px !important;
+      }
+      .sample-table-container table.dataTable tbody tr:hover td {
+        background: rgba(102, 126, 234, 0.08) !important;
+      }
+      .sample-table-container .dataTables_wrapper .dataTables_length,
+      .sample-table-container .dataTables_wrapper .dataTables_filter,
+      .sample-table-container .dataTables_wrapper .dataTables_info,
+      .sample-table-container .dataTables_wrapper .dataTables_paginate {
+        color: #888 !important;
+        font-size: 12px !important;
+      }
+      .sample-table-container .dataTables_wrapper .dataTables_filter input {
+        background: rgba(255,255,255,0.07) !important;
+        border: 1px solid rgba(255,255,255,0.12) !important;
+        color: #e0e0e0 !important;
+        border-radius: 6px !important;
+        padding: 4px 8px !important;
+      }
+      .sample-table-container .dataTables_wrapper .dataTables_paginate .paginate_button {
+        color: #888 !important;
+        border: none !important;
+      }
+      .sample-table-container .dataTables_wrapper .dataTables_paginate .paginate_button.current {
+        background: rgba(102, 126, 234, 0.2) !important;
+        color: #667eea !important;
+      }
+
+      /* ---- Parameter inputs row ---- */
+      .param-row {
+        display: flex;
+        gap: 20px;
+        margin-top: 16px;
+      }
+      .param-item {
+        flex: 1;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 10px;
+        padding: 14px 16px;
+      }
+      .param-item label {
+        color: #b0b0c0 !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+
+      /* ---- Select inputs ---- */
+      .selectize-input, .selectize-dropdown {
+        background: rgba(255,255,255,0.07) !important;
+        border: 1px solid rgba(255,255,255,0.12) !important;
+        color: #e0e0e0 !important;
+        border-radius: 8px !important;
+      }
+      .selectize-input.focus { border-color: #667eea !important; }
+      .selectize-dropdown-content .option {
+        color: #e0e0e0 !important;
+      }
+      .selectize-dropdown-content .option.active {
+        background: rgba(102, 126, 234, 0.2) !important;
+      }
+
+      /* ---- Design section hint ---- */
+      .design-hint {
+        font-size: 12px;
+        color: #888;
+        margin-top: 8px;
+        font-style: italic;
+      }
+
       /* Scrollbar */
       ::-webkit-scrollbar { width: 6px; }
       ::-webkit-scrollbar-track { background: transparent; }
@@ -326,6 +420,46 @@ ui <- fluidPage(
             )
         ),
 
+        # ---- Experimental Design ----
+        div(
+            class = "glass-card",
+            h3("\U0001F9EA Experimental Design"),
+            p(style = "color: #888; font-size: 13px; margin-bottom: 16px;",
+              "Upload a dataset.csv above to populate the sample table. ",
+              "Assign each sample as Control (C) or Treatment (T), and optionally exclude samples."
+            ),
+            div(
+                class = "sample-table-container",
+                DT::dataTableOutput("sample_design_table")
+            ),
+            div(class = "design-hint",
+                uiOutput("design_summary")
+            ),
+
+            # ---- Pipeline Parameters ----
+            div(
+                class = "param-row",
+                div(
+                    class = "param-item",
+                    numericInput("nr_peptides",
+                        label = "Min. Peptides per Protein",
+                        value = 2, min = 1, max = 10, step = 1
+                    )
+                ),
+                div(
+                    class = "param-item",
+                    selectInput("contrast_direction",
+                        label = "SAINTexpress Contrast Direction",
+                        choices = c(
+                            "Bait over Control (default)" = "bait_vs_control",
+                            "Control over Bait"           = "control_vs_bait"
+                        ),
+                        selected = "bait_vs_control"
+                    )
+                )
+            )
+        ),
+
         # ---- Run Button ----
         div(
             class = "glass-card", style = "text-align: center;",
@@ -377,11 +511,12 @@ ui <- fluidPage(
 server <- function(input, output, session) {
     # ---- Reactive values ----
     rv <- reactiveValues(
-        status      = "idle", # idle | running | success | error
-        console_log = character(0),
-        process     = NULL,
-        timer       = NULL,
-        report_path = NULL
+        status        = "idle", # idle | running | success | error
+        console_log   = character(0),
+        process       = NULL,
+        timer         = NULL,
+        report_path   = NULL,
+        sample_design = NULL  # data.frame: Sample, Group, CONTROL, Include
     )
 
     # ---- Status badge ----
@@ -432,40 +567,209 @@ server <- function(input, output, session) {
         rv$console_log <- c(rv$console_log, msg)
     }
 
-    # ---- Validate CONTROL column and add if missing ----
-    add_control_column <- function(dataset_path) {
+    # ---- Reactive dataset preview: populate sample design table on upload ----
+    observeEvent(input$dataset_file, {
+        req(input$dataset_file)
+        tryCatch({
+            df <- read.csv(input$dataset_file$datapath, stringsAsFactors = FALSE)
+
+            # Find sample name column
+            sample_col <- NULL
+            if ("Name" %in% colnames(df)) {
+                sample_col <- "Name"
+            } else if ("Relative.Path" %in% colnames(df)) {
+                df$Sample <- gsub("^x|.d.zip$|.raw$", "",
+                    basename(df$Relative.Path))
+                sample_col <- "Sample"
+            } else {
+                df$Sample <- paste0("Sample_", seq_len(nrow(df)))
+                sample_col <- "Sample"
+            }
+
+            # Find grouping column
+            group_val <- rep("Unknown", nrow(df))
+            for (col in colnames(df)) {
+                if (tolower(col) %in% c("grouping.var", "grouping_var",
+                    "groupingvar", "g_")) {
+                    group_val <- as.character(df[[col]])
+                    break
+                }
+            }
+
+            # Auto-assign CONTROL based on group names
+            ctrl <- ifelse(
+                grepl("control|beads", group_val, ignore.case = TRUE),
+                "C", "T"
+            )
+
+            # Existing CONTROL column overrides auto-detection
+            if ("CONTROL" %in% colnames(df)) {
+                ctrl <- as.character(df$CONTROL)
+            }
+
+            rv$sample_design <- data.frame(
+                Sample  = df[[sample_col]],
+                Group   = group_val,
+                CONTROL = ctrl,
+                Include = TRUE,
+                stringsAsFactors = FALSE
+            )
+        }, error = function(e) {
+            showNotification(
+                paste0("Error reading dataset: ", e$message),
+                type = "error"
+            )
+        })
+    })
+
+    # ---- Render editable sample design table ----
+    output$sample_design_table <- DT::renderDataTable({
+        req(rv$sample_design)
+        DT::datatable(
+            rv$sample_design,
+            editable = list(
+                target = "cell",
+                disable = list(columns = c(0, 1))  # Sample & Group are read-only
+            ),
+            selection = "none",
+            rownames = FALSE,
+            options = list(
+                pageLength = 20,
+                dom = "tp",
+                ordering = FALSE,
+                columnDefs = list(
+                    list(className = "dt-center", targets = c(2, 3))
+                )
+            )
+        )
+    })
+
+    # ---- Handle cell edits in sample design table ----
+    observeEvent(input$sample_design_table_cell_edit, {
+        info <- input$sample_design_table_cell_edit
+        row_idx <- info$row
+        col_idx <- info$col + 1  # DT uses 0-based, R uses 1-based
+        new_val <- info$value
+
+        if (col_idx == 3) {
+            # CONTROL column — validate C or T
+            new_val <- toupper(trimws(new_val))
+            if (!new_val %in% c("C", "T")) new_val <- "T"
+            rv$sample_design[row_idx, col_idx] <- new_val
+        } else if (col_idx == 4) {
+            # Include column — coerce to logical
+            rv$sample_design[row_idx, col_idx] <- as.logical(new_val)
+        }
+    })
+
+    # ---- Design summary ----
+    output$design_summary <- renderUI({
+        req(rv$sample_design)
+        sd <- rv$sample_design
+        included <- sd[sd$Include == TRUE, ]
+        n_ctrl <- sum(included$CONTROL == "C")
+        n_test <- sum(included$CONTROL == "T")
+        n_excl <- sum(sd$Include == FALSE)
+        groups <- paste(unique(included$Group), collapse = ", ")
+
+        parts <- paste0(
+            n_ctrl, " controls, ", n_test, " treatments"
+        )
+        if (n_excl > 0) {
+            parts <- paste0(parts, ", ", n_excl, " excluded")
+        }
+        parts <- paste0(parts, " | Groups: ", groups)
+
+        div(style = "color: #a78bfa;", parts)
+    })
+
+    # ---- Apply sample design: write modified dataset.csv ----
+    apply_sample_design <- function(dataset_path) {
         df <- read.csv(dataset_path, stringsAsFactors = FALSE)
 
-        if ("CONTROL" %in% colnames(df)) {
-            log_to_console("[INFO] CONTROL column already present in dataset.csv")
-            return(invisible(NULL))
-        }
+        if (!is.null(rv$sample_design)) {
+            sd <- rv$sample_design
 
-        # Look for the grouping column
-        gv_col <- NULL
-        for (col in colnames(df)) {
-            if (tolower(col) %in% c("grouping.var", "grouping_var", "groupingvar")) {
-                gv_col <- col
-                break
+            # Exclude unchecked samples
+            excluded <- sd$Sample[sd$Include == FALSE]
+            if (length(excluded) > 0) {
+                # Match by raw file name extracted from Relative.Path
+                if ("Relative.Path" %in% colnames(df)) {
+                    raw_names <- gsub("^x|.d.zip$|.raw$", "",
+                        basename(df$Relative.Path))
+                    df <- df[!raw_names %in% excluded, , drop = FALSE]
+                } else if ("Name" %in% colnames(df)) {
+                    df <- df[!df$Name %in% excluded, , drop = FALSE]
+                }
+                log_to_console(paste0(
+                    "[INFO] Excluded ", length(excluded),
+                    " samples: ", paste(excluded, collapse = ", ")
+                ))
+            }
+
+            # Apply CONTROL assignments from the design table
+            included_sd <- sd[sd$Include == TRUE, ]
+            if ("Relative.Path" %in% colnames(df)) {
+                raw_names <- gsub("^x|.d.zip$|.raw$", "",
+                    basename(df$Relative.Path))
+                m <- match(raw_names, included_sd$Sample)
+            } else if ("Name" %in% colnames(df)) {
+                m <- match(df$Name, included_sd$Sample)
+            } else {
+                m <- seq_len(nrow(df))
+            }
+            ctrl_vals <- included_sd$CONTROL[m]
+            ctrl_vals[is.na(ctrl_vals)] <- "T"
+            df$CONTROL <- ctrl_vals
+
+            # Ensure G_ column
+            if (!"G_" %in% colnames(df)) {
+                gv_col <- NULL
+                for (col in colnames(df)) {
+                    if (tolower(col) %in% c("grouping.var",
+                        "grouping_var", "groupingvar")) {
+                        gv_col <- col
+                        break
+                    }
+                }
+                if (!is.null(gv_col)) {
+                    df$G_ <- df[[gv_col]]
+                    log_to_console(paste0(
+                        "[INFO] Created G_ column from ", gv_col
+                    ))
+                }
+            }
+
+            log_to_console(paste0(
+                "[INFO] Applied design: ",
+                sum(df$CONTROL == "C"), " controls, ",
+                sum(df$CONTROL == "T"), " treatments"
+            ))
+        } else {
+            # Fallback: auto-assign if no design table
+            if (!"CONTROL" %in% colnames(df)) {
+                gv_col <- NULL
+                for (col in colnames(df)) {
+                    if (tolower(col) %in% c("grouping.var",
+                        "grouping_var", "groupingvar")) {
+                        gv_col <- col
+                        break
+                    }
+                }
+                if (!is.null(gv_col)) {
+                    df$CONTROL <- ifelse(
+                        grepl("control|beads", df[[gv_col]],
+                            ignore.case = TRUE),
+                        "C", "T"
+                    )
+                    log_to_console(paste0(
+                        "[INFO] Auto-assigned CONTROL: ",
+                        sum(df$CONTROL == "C"), " controls, ",
+                        sum(df$CONTROL == "T"), " treatments"
+                    ))
+                }
             }
         }
-
-        if (is.null(gv_col)) {
-            log_to_console("[WARN] No Grouping.Var column found — cannot auto-assign CONTROL column")
-            return(invisible(NULL))
-        }
-
-        # Assign C to groups containing "Control" or "Beads" (case-insensitive), T otherwise
-        df$CONTROL <- ifelse(
-            grepl("control|beads", df[[gv_col]], ignore.case = TRUE),
-            "C", "T"
-        )
-
-        log_to_console(
-            "[INFO] Added CONTROL column: ",
-            sum(df$CONTROL == "C"), " controls, ",
-            sum(df$CONTROL == "T"), " test samples"
-        )
 
         write.csv(df, dataset_path, row.names = FALSE)
         log_to_console("[INFO] Updated dataset.csv written to target directory")
@@ -554,15 +858,26 @@ server <- function(input, output, session) {
             ))
         }
 
-        # -- Verify / Add CONTROL column --
+        # -- Apply sample design (CONTROL assignments + exclusions) --
         log_to_console("")
-        log_to_console("[INFO] Checking CONTROL column in dataset...")
+        log_to_console("[INFO] Applying experimental design to dataset...")
         tryCatch(
-            add_control_column(dataset_dest),
+            apply_sample_design(dataset_dest),
             error = function(e) {
-                log_to_console(paste0("[WARN] Could not process CONTROL column: ", e$message))
+                log_to_console(paste0("[WARN] Could not apply design: ", e$message))
             }
         )
+
+        # -- Write GUI parameters for downstream scripts --
+        gui_params <- list(
+            nr_peptides        = input$nr_peptides,
+            contrast_direction = input$contrast_direction
+        )
+        gui_params_path <- file.path(target, "gui_params.yaml")
+        yaml::write_yaml(gui_params, gui_params_path)
+        log_to_console(paste0("[INFO] GUI parameters saved: gui_params.yaml"))
+        log_to_console(paste0("  Min peptides: ", input$nr_peptides))
+        log_to_console(paste0("  Contrast direction: ", input$contrast_direction))
 
         # -- Launch pipeline subprocess --
         log_to_console("")

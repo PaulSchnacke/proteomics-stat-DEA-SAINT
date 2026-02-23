@@ -187,6 +187,56 @@ run_rscript <- function(script_path, cli_args, step_label) {
   log_ok(step_label, " — completed successfully")
 }
 
+# ---- Utility: Fix HTML links in DEA output -----------------------------------
+# CMD_DEA.R generates index.html with href paths that mimic B-Fabric server
+# structure (e.g., href="DEA_20260223_Olocal_dea_robscale/report.html").
+# Since locally the HTML and its sibling files live inside the zipdir_name
+# folder already, these paths are broken. This function rewrites them.
+
+fix_html_links <- function(output_dir, label = "") {
+  html_files <- list.files(output_dir,
+    pattern = "\\.html$",
+    full.names = TRUE, recursive = TRUE
+  )
+
+  if (length(html_files) == 0) {
+    log_info("No HTML files found in ", output_dir, " — skipping link fix")
+    return(invisible(NULL))
+  }
+
+  # Identify the zipdir subdirectory (the deepest directory containing HTML)
+  subdirs <- list.dirs(output_dir, recursive = FALSE, full.names = FALSE)
+
+  for (html_file in html_files) {
+    lines <- readLines(html_file, warn = FALSE, encoding = "UTF-8")
+    modified <- FALSE
+
+    for (subdir in subdirs) {
+      # Pattern: href="<subdir>/filename" or src="<subdir>/filename"
+      # Rewrite to: href="filename" (since index.html is inside <subdir>)
+      pattern <- paste0('(href|src)="', subdir, '/')
+      replacement <- '\\1="'
+
+      if (any(grepl(pattern, lines, fixed = FALSE))) {
+        lines <- gsub(pattern, replacement, lines)
+        modified <- TRUE
+      }
+    }
+
+    # Also fix any remaining absolute BFABRIC-style paths:
+    # e.g., href="/bfabric/workunit/show.html?id=..." -> "#"
+    if (any(grepl('href="/bfabric/', lines, fixed = TRUE))) {
+      lines <- gsub('href="/bfabric/[^"]*"', 'href="#"', lines)
+      modified <- TRUE
+    }
+
+    if (modified) {
+      writeLines(lines, html_file, useBytes = TRUE)
+      log_ok("Fixed links in: ", basename(html_file), " (", label, ")")
+    }
+  }
+}
+
 
 # ---- Parse command-line arguments --------------------------------------------
 
@@ -233,6 +283,33 @@ dataset_csv <- discover_file(
 )
 log_ok("Dataset: ", basename(dataset_csv))
 
+# ---- 1a.1 Ensure G_ column exists in dataset.csv ----------------------------
+# prolfquapp expects a grouping column named "G_" (set in build_local_config).
+# If the dataset has Grouping.Var but no G_, create it.
+log_info("Checking for G_ column in dataset.csv ...")
+ds <- read.csv(dataset_csv, stringsAsFactors = FALSE)
+
+if (!"G_" %in% colnames(ds)) {
+  # Find the Grouping.Var column (case-insensitive, flexible naming)
+  gv_col <- NULL
+  for (col in colnames(ds)) {
+    if (tolower(col) %in% c("grouping.var", "grouping_var", "groupingvar")) {
+      gv_col <- col
+      break
+    }
+  }
+
+  if (!is.null(gv_col)) {
+    ds$G_ <- ds[[gv_col]]
+    write.csv(ds, dataset_csv, row.names = FALSE)
+    log_ok("Created G_ column from ", gv_col, " (", length(unique(ds$G_)), " groups)")
+  } else {
+    log_warn("No Grouping.Var column found — G_ column NOT created. PCA/Volcano plots may be missing.")
+  }
+} else {
+  log_ok("G_ column already present in dataset.csv")
+}
+
 # Config: config.yaml
 config_yaml <- discover_file(
   target_dir,
@@ -273,6 +350,17 @@ log_info("  Difference threshold: ", diff_threshold)
 log_info("  FDR threshold:        ", fdr_threshold)
 log_info("  Order ID:             ", order_id)
 
+# ---- 1d.1 Override with GUI parameters if gui_params.yaml exists ------------
+gui_nr_peptides <- 1  # default for DEA
+gui_params_file <- file.path(target_dir, "gui_params.yaml")
+if (file.exists(gui_params_file)) {
+  gui_p <- yaml::read_yaml(gui_params_file)
+  if (!is.null(gui_p$nr_peptides)) {
+    gui_nr_peptides <- as.integer(gui_p$nr_peptides)
+    log_info("  [GUI] nr_peptides overridden to: ", gui_nr_peptides)
+  }
+}
+
 # ---- 1e. Generate local YAML configs ----------------------------------------
 log_info("Generating local YAML configuration files ...")
 
@@ -296,7 +384,7 @@ build_local_config <- function(transform_method, workunit_suffix) {
       model          = "prolfqua",
       model_missing  = TRUE,
       interaction    = FALSE,
-      nr_peptides    = 1,
+      nr_peptides    = gui_nr_peptides,
       remove_decoys  = FALSE,
       remove_cont    = FALSE,
       FDR_threshold  = fdr_threshold,
@@ -367,6 +455,7 @@ dea_none_args <- paste(
 )
 
 run_rscript(cmd_dea, dea_none_args, "STEP 3a: DEA (none)")
+fix_html_links(dea_none_outdir, "DEA none")
 
 # ---- 3b. DEA Run 2: transform = robscale ------------------------------------
 log_info("DEA Run 2: Normalization = ROBSCALE")
@@ -384,8 +473,36 @@ dea_robscale_args <- paste(
 )
 
 run_rscript(cmd_dea, dea_robscale_args, "STEP 3b: DEA (robscale)")
+fix_html_links(dea_robscale_outdir, "DEA robscale")
 
 log_info("STEP 3 COMPLETE")
+
+
+# ==============================================================================
+# STEP 3c: ExploreDE Export — SummarizedExperiment .rds
+# ==============================================================================
+log_section("STEP 3c: ExploreDE Export (export_exploreDE.R)")
+
+export_script <- file.path(HOME_DIR, "export_exploreDE.R")
+if (!file.exists(export_script)) {
+  for (candidate in c(file.path(target_dir, "export_exploreDE.R"), "export_exploreDE.R")) {
+    if (file.exists(candidate)) {
+      export_script <- normalizePath(candidate)
+      break
+    }
+  }
+}
+
+if (!file.exists(export_script)) {
+  log_warn("export_exploreDE.R not found — skipping SummarizedExperiment export.")
+  log_warn("Place it next to run_pipeline.R to enable exploreDE .rds generation.")
+} else {
+  log_ok("Found: ", export_script)
+  export_args <- shQuote(target_dir)
+  run_rscript(export_script, export_args, "STEP 3c: ExploreDE Export")
+}
+
+log_info("STEP 3c COMPLETE")
 
 
 # ==============================================================================
@@ -426,8 +543,10 @@ log_section("AP-MS Pipeline — All Steps Completed!")
 log_info("All output is in: ", target_dir)
 cat("\n")
 cat("  Output directories:\n")
-cat("    output_qc/            QC reports (protein abundances, sample size)\n")
-cat("    output_dea_none/      DEA results (no normalization)\n")
-cat("    output_dea_robscale/  DEA results (robscale normalization)\n")
-cat("    ClocalWUlocal/        SAINTexpress results & reports\n")
+cat("    output_qc/                    QC reports (protein abundances, sample size)\n")
+cat("    output_dea_none/              DEA results (no normalization)\n")
+cat("    output_dea_robscale/          DEA results (robscale normalization)\n")
+cat("    results_SAINT/                SAINTexpress results & reports\n")
+cat("    SummarizedExperiment.rds      ExploreDE-compatible data object\n")
 cat("\n")
+
