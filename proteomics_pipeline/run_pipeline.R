@@ -310,13 +310,39 @@ if (!"G_" %in% colnames(ds)) {
   log_ok("G_ column already present in dataset.csv")
 }
 
-# Config: config.yaml
-config_yaml <- discover_file(
-  target_dir,
-  patterns = c("^config\\.yaml$"),
-  label    = "config YAML"
-)
-log_ok("Config: ", basename(config_yaml))
+# Config: config.yaml (OPTIONAL — defaults are generated if not provided)
+config_yaml <- list.files(target_dir, pattern = "^config\\.yaml$",
+  full.names = TRUE, ignore.case = TRUE)
+
+if (length(config_yaml) > 0) {
+  config_yaml <- config_yaml[1]
+  log_ok("Config: ", basename(config_yaml))
+  yml <- yaml::read_yaml(config_yaml)
+} else {
+  log_info("No config.yaml found — using auto-generated defaults")
+  yml <- list(
+    application = list(
+      parameters = list(
+        `10|datasetId`        = "local",
+        `11|Normalization`    = "none",
+        `21|BFDRsignificance` = "0.05",
+        `22|FCthreshold`      = "2",
+        `31|SpcInt`           = "Intensity",
+        `51|Transformation`   = "none",
+        `61|nrPeptides`       = "2"
+      ),
+      protocol = "local"
+    ),
+    job_configuration = list(
+      order_id    = "local",
+      workunit_id = "local"
+    )
+  )
+  # Write the auto-generated config so downstream scripts can also read it
+  auto_config_path <- file.path(target_dir, "config.yaml")
+  yaml::write_yaml(yml, auto_config_path)
+  log_ok("Auto-generated config.yaml written to target directory")
+}
 
 # ---- 1b. FASTA handling (auto-merge if multiple) ----------------------------
 log_info("Handling FASTA files ...")
@@ -333,15 +359,23 @@ if (nchar(cmd_dea) == 0) log_error("Cannot locate CMD_DEA.R — is prolfquapp in
 log_ok("CMD_QUANT_QC.R: ", cmd_qc)
 log_ok("CMD_DEA.R:      ", cmd_dea)
 
-# ---- 1d. Read original config.yaml and extract parameters --------------------
-log_info("Reading config.yaml ...")
+# ---- 1d. Extract parameters from config -------------------------------------
+log_info("Extracting pipeline parameters ...")
 
-yml <- yaml::read_yaml(config_yaml)
 params <- yml$application$parameters
 
-normalization_param <- params[["3|Normalization"]] %||% "robscale"
-diff_threshold <- as.numeric(params[["4|Difference_threshold"]] %||% "1")
-fdr_threshold <- as.numeric(params[["5|FDR_threshold"]] %||% "0.05")
+# Support both FGCZ key formats (numbered with | separator)
+# The code looks for specific keys but falls back to defaults via %||%
+normalization_param <- params[["3|Normalization"]]  %||%
+                       params[["11|Normalization"]] %||% "robscale"
+diff_threshold <- as.numeric(
+  params[["4|Difference_threshold"]]  %||%
+  params[["22|FCthreshold"]]          %||% "1"
+)
+fdr_threshold <- as.numeric(
+  params[["5|FDR_threshold"]]           %||%
+  params[["21|BFDRsignificance"]]       %||% "0.05"
+)
 order_id <- yml$job_configuration$order_id %||% "local"
 
 log_info("Extracted parameters:")

@@ -1,0 +1,51 @@
+application:
+  input:
+    DIANN_v19:
+    - bfabric@fgcz-ms.uzh.ch:/srv/www/htdocs/p41079/bfabric/Proteomics/DIANN_v19/2026/2026-02/2026-02-16/workunit_340822/Result_WU340822.zip
+    - bfabric@fgcz-ms.uzh.ch:/srv/www/htdocs/p41079/bfabric/Proteomics/DIANN_v19/2026/2026-02/2026-02-16/workunit_340822/DIANN_Result_WU340822.zip
+  output:
+  - bfabric@fgcz-ms.uzh.ch:/srv/www/htdocs/p41079/bfabric/Proteomics/SAINTexpress/2026/2026-02/2026-02-19/workunit_341038/3091344.zip
+  parameters:
+    10|datasetId: '65609'
+    11|Normalization: none
+    21|BFDRsignificance: '0.05'
+    22|FCthreshold: '2'
+    31|SpcInt: Intensity
+    51|Transformation: none
+    61|nrPeptides: '2'
+  protocol: scp
+job_configuration:
+  executable: /home/bfabric/slurmworker/bin/fgcz_slurm_SaintExpress_prolfqua.bash
+  external_job_id: 239139
+  fastasequence: '>sp|ADD000|iRTKit iRT-Kit_WR_fusion
+
+    LGGNEQVTRYILAGVENSKGTFIIDPGGVIRGTFIIDPAAVIRGAGSSEPVTGLDAKTPVISGGPYEYRVEATFGVDESNAKTPVITGAPYEYRDGLDAASYYAPVRADVTPADFSEWSKLFLQFGAQGSPFLK
+
+    >sp|ADD001|bait_protein bait protein sequence
+
+    MEGLRELERVQRIIELMESHGVLNPNNNINPYSNRFLANFTHFLVQTCSELDMEIKCQLISEYMTKISTLFLEEALQCIGEEGNEHIGNAVPVHCDDEQNVDPSRDNFLDTAAIGLDSMLRANSTLEDFCRSYFMFHKMDVHQPQLIFKYLPILSFTESYIYQLDTLNEKLLQSPAYGVQLGEIESYVGCQTEGRRAIRSLKMLEADPFKPLLILLEHQGLLTERIREELWSGVEYWSLERKLCCHPLSGSESSVGDVMRAIHLKSFDYRVLNLLLYQLRGEKVNELHMEFLSISEFLVELSDDLFDYEDDVLENNFNILRMFVRIYGASRAPTMLAKRITETEEKYENMLKSLDPELAMNYQKRCEEATKEGGKISGPSLGTWNIPTIIEDEDSYRCKILNVKPTTVVQADVDKCYSSGGSHHHHHHGGGGSDYKDDDDKGGGGSDYKDDDDKGGGGSDYKDDDDK'
+  input:
+    DIANN_v19:
+    - resource_id: 3086668
+      resource_url: https://fgcz-bfabric.uzh.ch/bfabric/resource/show.html?id=3086668
+    - resource_id: 3086667
+      resource_url: https://fgcz-bfabric.uzh.ch/bfabric/resource/show.html?id=3086667
+  inputdataset: null
+  order_id: 41079
+  output:
+    protocol: scp
+    resource_id: 3091344
+    ssh_args: -o StrictHostKeyChecking=no -2 -l bfabric -x
+  project_id: null
+  stderr:
+    protocol: file
+    resource_id: 3091346
+    url: /home/bfabric/slurmworker/log/workunitid-341038_resourceid-3091344.err
+  stdout:
+    protocol: file
+    resource_id: 3091345
+    url: /home/bfabric/slurmworker/log/workunitid-341038_resourceid-3091344.out
+  workunit_createdby: tobiasko
+  workunit_id: 341038
+  workunit_url: https://fgcz-bfabric.uzh.ch/bfabric/workunit/show.html?id=341038
+
