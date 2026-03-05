@@ -73,10 +73,14 @@ log_warn <- function(...) {
 discover_file <- function(dir, patterns, label, pick_largest = FALSE) {
   matches <- character(0)
   for (pat in patterns) {
-    found <- list.files(dir, pattern = pat, full.names = TRUE, ignore.case = TRUE)
+    found <- list.files(dir, pattern = pat, full.names = TRUE,
+                        ignore.case = TRUE, recursive = TRUE)
     matches <- c(matches, found)
   }
   matches <- unique(matches)
+
+  # Exclude files inside Pipeline_Results to prevent finding previous outputs
+  matches <- matches[!grepl("Pipeline_Results", matches, fixed = TRUE)]
 
   if (length(matches) == 0) {
     stop("[ERROR] No ", label, " found in: ", dir,
@@ -211,8 +215,11 @@ if (file.exists(file.path(target_dir, "proteins.fasta"))) {
 prolfquasaint::copy_SAINT_express(run_script = FALSE)
 log_ok("SAINTexpress Rmd template and bibliography copied")
 
-# Output directory
-ZIPDIR <- "results_SAINT"
+# Output directory — inside Pipeline_Results to match run_pipeline.R structure
+PIPELINE_RESULTS <- file.path(target_dir, "Pipeline_Results")
+dir.create(PIPELINE_RESULTS, showWarnings = FALSE, recursive = TRUE)
+
+ZIPDIR <- file.path(PIPELINE_RESULTS, "results_SAINT")
 if (dir.exists(ZIPDIR)) {
   log_info("SAINTexpress output directory exists — will overwrite: ", ZIPDIR)
 }
@@ -411,11 +418,7 @@ localSAINTinput <- prolfquasaint::protein_2localSaint(
   baitCol       = "Bait_",
   CorTCol       = "CONTROL"
 )
-
-log_info("Intensity summary for SAINTexpress input:")
-print(summary(localSAINTinput$inter$exp_transformedIntensity))
-
-# Write the 3 input files (inter.txt, prey.txt, bait.txt) exactly as runSaint does
+# Write the 3 input files (inter.txt, prey.txt, bait.txt)
 inter_path <- file.path(target_dir, "inter.txt")
 prey_path <- file.path(target_dir, "prey.txt")
 bait_path <- file.path(target_dir, "bait.txt")
@@ -477,7 +480,7 @@ log_info("Running: ", binary_name, " inter.txt prey.txt bait.txt")
 
 saint_out <- system2(
   saint_exe,
-  args   = c(inter_path, prey_path, bait_path),
+  args   = c(shQuote(inter_path), shQuote(prey_path), shQuote(bait_path)),
   stdout = TRUE,
   stderr = TRUE,
   wait   = TRUE
@@ -489,7 +492,14 @@ log_ok("SAINTexpress execution completed")
 # ---- G.3: Read SAINTexpress output (list.txt) --------------------------------
 Sys.sleep(2) # brief pause to ensure file is flushed
 
-list_file <- file.path(target_dir, "list.txt")
+list_file <- file.path(PIPELINE_RESULTS, "list.txt")
+# SAINTexpress writes list.txt to CWD; also check target_dir as fallback
+if (!file.exists(list_file)) {
+  list_file_cwd <- file.path(target_dir, "list.txt")
+  if (file.exists(list_file_cwd)) {
+    file.copy(list_file_cwd, list_file, overwrite = TRUE)
+  }
+}
 if (!file.exists(list_file)) {
   stop("[ERROR] SAINTexpress did not produce list.txt. Check binary output above.",
     call. = FALSE
@@ -633,6 +643,10 @@ log_ok("SAINTexpress documentation copied to output")
 # ==============================================================================
 log_section("Step J: Report Rendering")
 
+if (!exists('PIPELINE_RESULTS')) {
+  PIPELINE_RESULTS <- file.path(target_dir, 'Pipeline_Results')
+}
+
 # Populate REPORTDATA with all objects the Rmd template needs
 REPORTDATA$BFABRIC <- BFABRIC
 REPORTDATA$lfqdata_transformed <- lfqdata_transformed
@@ -642,8 +656,8 @@ REPORTDATA$prot_annot <- dplyr::rename(prot_annot$row_annot, protein = protein_I
 REPORTDATA$contrast_direction <- GUI_PARAMS$contrast_direction
 
 # Save REPORTDATA for potential re-rendering
-saveRDS(REPORTDATA, file = "REPORTDATA.rds")
-log_ok("REPORTDATA.rds saved")
+saveRDS(REPORTDATA, file = file.path(PIPELINE_RESULTS, "REPORTDATA.rds"))
+log_ok("REPORTDATA.rds saved to Pipeline_Results")
 
 # Locate the Rmd template
 rmd_template <- "SaintExpressReportMsFragger.Rmd"
@@ -686,20 +700,14 @@ if (is.null(rmd_path)) {
     "SEP", "REPORTDATA", "ZIPDIR", "treat",
     "BFABRIC", "target_dir", "rmd_path",
     "text", "fileNameHTML", "log_info", "log_ok",
-    "log_section", "log_warn", "GUI_PARAMS"
+    "log_section", "log_warn", "GUI_PARAMS", "PIPELINE_RESULTS"
   )))
 
   rmarkdown::render(
     rmd_path,
     params        = list(sep = REPORTDATA, textpreprocessing = text),
     output_format = bookdown::html_document2(),
-    output_file   = file.path(target_dir, fileNameHTML)
-  )
-
-  file.copy(
-    file.path(target_dir, fileNameHTML),
-    file.path(ZIPDIR, fileNameHTML),
-    overwrite = TRUE
+    output_file   = file.path(PIPELINE_RESULTS, 'results_SAINT', fileNameHTML)
   )
 
   log_ok("Report rendered: ", fileNameHTML)
@@ -710,7 +718,7 @@ if (is.null(rmd_path)) {
 # DONE
 # ==============================================================================
 log_section("SAINTexpress Analysis Complete!")
-log_info("Output directory: ", file.path(target_dir, ZIPDIR))
+log_info("Output directory: ", ZIPDIR)
 cat("\n")
 cat("  Output files:\n")
 cat("    ", paste0(treat, "WU", BFABRIC$workunitID, "_data.xlsx"), "  (all results)\n")

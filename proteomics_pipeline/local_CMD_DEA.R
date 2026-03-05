@@ -1,0 +1,269 @@
+#!/usr/bin/env Rscript
+# ==============================================================================
+# local_CMD_DEA.R — Local DEA Wrapper
+#
+# Wraps the prolfquapp CMD_DEA.R logic but overrides the Rmd templates
+# with our locally modified versions (crosstalk fixes, plotly deps, etc.).
+#
+# The package CMD_DEA.R calls prolfquapp::copy_DEA_Files() which copies
+# default templates into the working directory, overwriting local edits.
+# This wrapper re-copies our fixed templates AFTER copy_DEA_Files() runs.
+#
+# Usage: Same CLI interface as CMD_DEA.R:
+#   Rscript local_CMD_DEA.R config.yaml -i <indir> -d <dataset> -s <software> \
+#          -w <workunit> -o <outdir>
+# ==============================================================================
+
+# ---- Resolve SCRIPT_SOURCE_DIR (directory where this script lives) -----------
+SCRIPT_SOURCE_DIR <- dirname(normalizePath(
+  sub("--file=", "", grep("--file=", commandArgs(), value = TRUE)[1])
+))
+message("[local_CMD_DEA] SCRIPT_SOURCE_DIR = ", SCRIPT_SOURCE_DIR)
+
+# ==============================================================================
+# BEGIN: Replicate CMD_DEA.R logic with template override
+# ==============================================================================
+
+if (!require("optparse", quietly = TRUE)) {
+  install.packages("optparse", dependencies = TRUE)
+}
+
+option_list <- list(
+  optparse::make_option(c("-i", "--indir"),
+    type = "character", default = ".",
+    help = "folder containing fasta and diann-output files",
+    metavar = "path"
+  ),
+  optparse::make_option(c("-d", "--dataset"),
+    type = "character", default = "dataset.csv",
+    help = "file with annotation",
+    metavar = "character"
+  ),
+  optparse::make_option(c("-y", "--yaml"),
+    type = "character", default = "config.yaml",
+    help = "yaml configuration file",
+    metavar = "character"
+  ),
+  optparse::make_option(c("-w", "--workunit"),
+    type = "character", default = NULL,
+    help = "workunit identifier",
+    metavar = "character"
+  ),
+  optparse::make_option(c("-s", "--software"),
+    type = "character", default = NULL,
+    help = paste0("possible options: ", paste(names(prolfquapp::get_procfuncs()),
+      collapse = ", "
+    )),
+    metavar = "character"
+  ),
+  optparse::make_option(c("-o", "--outdir"),
+    type = "character", default = NULL,
+    help = "output directory",
+    metavar = "character"
+  ),
+  optparse::make_option(c("--libPath"),
+    type = "character", default = NULL,
+    help = " (optional) R library path",
+    metavar = "string"
+  )
+)
+
+parser <- optparse::OptionParser(usage = "%prog config.yaml --software DIANN --indir .", option_list = option_list)
+
+if (length(commandArgs(TRUE)) == 0) {
+  optparse::print_help(parser)
+}
+
+arguments <- optparse::parse_args(parser, positional_arguments = TRUE)
+opt <- arguments$options
+ymlfile <- arguments$args
+
+logger::log_appender(logger::appender_console)
+logger::log_info("LIBRARY PATHS (.libPaths()):", paste(.libPaths(), collapse = "\n"))
+
+prolfquapp::set_lib_path(opt$libPath)
+
+library(prolfquapp)
+logger::log_info("using : ", system.file(package = "prolfqua"))
+logger::log_info("using : ", system.file(package = "prolfquapp"))
+
+ymlfile <- if (length(ymlfile) == 0) {
+  opt$yaml
+} else {
+  ymlfile
+}
+
+logger::log_info("YAML file read: ", ymlfile)
+stopifnot(file.exists(ymlfile))
+
+GRP2 <- prolfquapp::get_config(ymlfile)
+
+res <- prolfquapp::sync_opt_config(opt, GRP2)
+opt <- res$opt
+GRP2 <- res$config
+
+GRP2$processing_options$internal <- NULL
+
+dir.create(opt$outdir)
+dir.create(GRP2$get_zipdir())
+
+current_time <- Sys.time()
+formatted_time <- format(current_time, "%Y%m%d%H%M")
+logfile <- paste0("prolfqua_", formatted_time, ".log")
+appender_combined <- logger::appender_tee(file.path(GRP2$get_zipdir(), logfile))
+logger::log_appender(appender_combined)
+logger::log_info(prolfquapp::capture_output(quote(lobstr::tree(opt))))
+logger::log_info("Writing to output directory : ", GRP2$get_zipdir(), " and file :", logfile)
+
+logger::log_info("prolfquapp paramters : ")
+logger::log_info(prolfquapp::capture_output(quote(lobstr::tree(prolfqua::R6_extract_values(GRP2)))))
+
+
+annotation <- file.path(opt$dataset) |>
+  prolfquapp::read_table_data() |>
+  prolfquapp::read_annotation(prefix = GRP2$group)
+
+logger::log_info("ContrastNames: \n", paste(names(annotation$contrasts), collapse = "\n"))
+logger::log_info("Contrast: \n", paste(annotation$contrasts, collapse = "\n"))
+
+logger::log_info("Factors : ", paste(annotation$atable$factor_keys_depth(), collapse = "\n"))
+
+# --------------------------------------------------------------------------
+# HARD OVERRIDE: copy_DEA_Files() copies DEFAULT package templates into the
+# working directory. We MUST overwrite them with our local fixed versions
+# using absolute paths from SCRIPT_SOURCE_DIR.
+# --------------------------------------------------------------------------
+prolfquapp::copy_DEA_Files()
+
+# Override with local templates — absolute paths, with verification
+local_templates <- c("_Grp2Analysis_V2.Rmd", "_DiffExpQC.Rmd", "bibliography.bib")
+for (tmpl in local_templates) {
+  src <- file.path(SCRIPT_SOURCE_DIR, tmpl)
+  if (file.exists(src)) {
+    file.copy(from = src, to = ".", overwrite = TRUE)
+    sz <- file.size(tmpl)
+    md5 <- tools::md5sum(tmpl)
+    message("[HARD OVERRIDE] ", tmpl,
+            " | size = ", sz, " bytes",
+            " | md5 = ", md5,
+            " | from: ", src)
+    logger::log_info("HARD OVERRIDE: ", tmpl,
+                     " (size=", sz, ", md5=", md5, ") from ", SCRIPT_SOURCE_DIR)
+  } else {
+    logger::log_warn("LOCAL TEMPLATE NOT FOUND: ", src)
+  }
+}
+# --------------------------------------------------------------------------
+
+logger::log_info("Software: ", opt$software)
+
+
+prolfqua_preprocess_functions <- get_procfuncs()
+if (!opt$software %in% names(prolfqua_preprocess_functions)) {
+  logger::log_error(opt$software, " no in ", paste0(names(prolfqua_preprocess_functions)))
+}
+
+
+result <- tryCatch(
+  {
+    procsoft <- preprocess_software(
+      opt$indir,
+      annotation,
+      preprocess_functions = prolfqua_preprocess_functions[[opt$software]],
+      pattern_contaminants = GRP2$processing_options$pattern_contaminants,
+      pattern_decoys = GRP2$processing_options$pattern_decoys
+    )
+    list(value = procsoft, error = NULL, stack_trace = NULL)
+  },
+  error = function(e) {
+    stack_trace <- capture.output(traceback())
+    list(
+      value = NULL,
+      error = conditionMessage(e),
+      stack_trace = paste(stack_trace, collapse = "\n")
+    )
+  }
+)
+
+if (!is.null(result$error)) {
+  logger::log_error(result$error, "\n")
+  logger::log_error("Stack trace:\n")
+  logger::log_error(result$stack_trace, "\n")
+  if (interactive()) {
+    stop("error occured")
+  } else {
+    quit(save = "no", status = 1)
+  }
+} else {
+  xd <- result$value$xd
+  files <- result$value$files
+}
+
+
+logger::log_info("Processing done:", opt$software)
+logger::log_info(paste(c("Protein Annotation :\n", capture.output(print(xd$protein_annotation$get_summary()))), collapse = "\n"))
+logger::log_info("AGGREGATING PEPTIDE DATA: {GRP2$processing_options$aggregate}.")
+lfqdata <- prolfquapp::aggregate_data(xd$lfqdata, agg_method = GRP2$processing_options$aggregate)
+
+
+logger::log_info("END OF PROTEIN AGGREGATION")
+logger::log_info("RUN ANALYSIS")
+
+grp <- prolfquapp::generate_DEA_reports2(
+  lfqdata,
+  GRP2,
+  xd$protein_annotation,
+  annotation$contrasts
+)
+
+
+logger::log_info("Writing results to: ", GRP2$get_zipdir())
+
+outdir <- prolfquapp::write_DEA_all(
+  grp,
+  name = "",
+  boxplot = FALSE,
+  markdown = "_Grp2Analysis_V2.Rmd"
+)
+
+arrow::write_parquet(grp$RES$transformedlfqData$data, sink = file.path(GRP2$get_result_dir(), "lfqdata_normalized.parquet"))
+cfg <- prolfqua::R6_extract_values(grp$RES$transformedlfqData$config)
+yaml::write_yaml(cfg, file.path(GRP2$get_result_dir(), "lfqdata.yaml"))
+
+
+lfqdataIB <- xd$lfqdata$get_subset(xd$protein_annotation$clean(
+  contaminants = GRP2$processing_options$remove_cont,
+  decoys = GRP2$processing_options$remove_decoys
+))
+
+ibaq_file <- file.path(grp$get_result_dir(), paste0("IBAQ_", opt$workunit, ".xlsx"))
+if (length(xd$lfqdata$config$table$hierarchy_keys_depth()) == 1) {
+  ibaq <- compute_IBAQ_values(lfqdataIB, xd$protein_annotation)
+  writexl::write_xlsx(
+    ibaq$to_wide()$data,
+    path = ibaq_file
+  )
+}
+
+outdir$data_files$ibaq_file <- ibaq_file
+grp$get_result_dir()
+
+prolfquapp::write_index_html(outdir, result_dir = grp$get_zipdir())
+
+logger::log_info("Writing summarized experiment.")
+SE <- prolfquapp::make_SummarizedExperiment(grp)
+saveRDS(SE, file = file.path(grp$get_result_dir(), "SummarizedExperiment.rds"))
+
+logger::log_info("Creating directory with input files :", GRP2$get_input_dir())
+dir.create(GRP2$get_input_dir())
+
+prolfquapp::copy_DEA_Files(workdir = GRP2$get_input_dir())
+prolfquapp::copy_shell_script(workdir = GRP2$get_input_dir())
+
+file.copy(c(files$data, files$fasta, ymlfile, opt$dataset), GRP2$get_input_dir())
+
+logger::log_info("Write yaml with parameters: ", file.path(GRP2$get_input_dir(), "minimal.yaml"))
+
+GRP2$RES <- NULL
+GRP2$pop <- NULL
+yaml::write_yaml(prolfqua::R6_extract_values(GRP2), file = file.path(GRP2$get_input_dir(), "minimal.yaml"))

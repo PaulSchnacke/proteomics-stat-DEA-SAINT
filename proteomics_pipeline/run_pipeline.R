@@ -81,10 +81,15 @@ log_error <- function(...) {
 discover_file <- function(dir, patterns, label, pick_largest = FALSE) {
   matches <- character(0)
   for (pat in patterns) {
-    found <- list.files(dir, pattern = pat, full.names = TRUE, ignore.case = TRUE)
+    found <- list.files(dir, pattern = pat, full.names = TRUE,
+                        ignore.case = TRUE, recursive = TRUE)
     matches <- c(matches, found)
   }
   matches <- unique(matches)
+
+  # CRITICAL: Exclude files inside Pipeline_Results to prevent the script
+  # from finding its own previous outputs and doubling data row counts.
+  matches <- matches[!grepl("Pipeline_Results", matches, fixed = TRUE)]
 
   if (length(matches) == 0) {
     log_error(
@@ -253,9 +258,17 @@ if (length(args) < 1) {
 
 target_dir <- normalizePath(args[1], mustWork = TRUE)
 
+# ---- Define output directory inside target_dir ------------------------------
+# All outputs go into Pipeline_Results/ inside target_dir.
+# discover_file() explicitly excludes Pipeline_Results/ to prevent
+# prolfquapp's recursive discovery from finding its own previous outputs.
+OUT_DIR <- file.path(target_dir, "Pipeline_Results")
+dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
+
 log_section("AP-MS Pipeline Starting")
-log_info("Target directory: ", target_dir)
-log_info("Timestamp:        ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+log_info("Target directory:  ", target_dir)
+log_info("Output directory:  ", OUT_DIR)
+log_info("Timestamp:         ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
 
 
 # ==============================================================================
@@ -300,14 +313,17 @@ if (!"G_" %in% colnames(ds)) {
   }
 
   if (!is.null(gv_col)) {
-    ds$G_ <- ds[[gv_col]]
+    ds$G_ <- make.names(ds[[gv_col]])
     write.csv(ds, dataset_csv, row.names = FALSE)
-    log_ok("Created G_ column from ", gv_col, " (", length(unique(ds$G_)), " groups)")
+    log_ok("Created G_ column from ", gv_col, " (", length(unique(ds$G_)), " groups, sanitized)")
   } else {
     log_warn("No Grouping.Var column found — G_ column NOT created. PCA/Volcano plots may be missing.")
   }
 } else {
-  log_ok("G_ column already present in dataset.csv")
+  # Sanitize existing G_ column
+  ds$G_ <- make.names(ds$G_)
+  write.csv(ds, dataset_csv, row.names = FALSE)
+  log_ok("G_ column already present in dataset.csv (sanitized with make.names)")
 }
 
 # Config: config.yaml (OPTIONAL — defaults are generated if not provided)
@@ -348,16 +364,21 @@ if (length(config_yaml) > 0) {
 log_info("Handling FASTA files ...")
 fasta_file <- handle_fasta_files(target_dir)
 
-# ---- 1c. Locate FGCZ package scripts ----------------------------------------
-log_info("Locating prolfquapp package scripts ...")
+# ---- 1c. Locate scripts ----------------------------------------------------
+log_info("Locating pipeline scripts ...")
 
 cmd_qc <- system.file("application/CMD_QUANT_QC.R", package = "prolfquapp")
-cmd_dea <- system.file("application/CMD_DEA.R", package = "prolfquapp")
+
+# Use LOCAL DEA wrapper instead of package CMD_DEA.R.
+# The package CMD_DEA.R calls copy_DEA_Files() which overwrites our locally
+# modified Rmd templates. local_CMD_DEA.R re-copies our fixed templates
+# (crosstalk fixes, plotly deps, etc.) after the package copy step.
+cmd_dea <- file.path(HOME_DIR, "local_CMD_DEA.R")
 
 if (nchar(cmd_qc) == 0) log_error("Cannot locate CMD_QUANT_QC.R — is prolfquapp installed?")
-if (nchar(cmd_dea) == 0) log_error("Cannot locate CMD_DEA.R — is prolfquapp installed?")
+if (!file.exists(cmd_dea)) log_error("Cannot locate local_CMD_DEA.R in: ", HOME_DIR)
 log_ok("CMD_QUANT_QC.R: ", cmd_qc)
-log_ok("CMD_DEA.R:      ", cmd_dea)
+log_ok("local_CMD_DEA.R: ", cmd_dea)
 
 # ---- 1d. Extract parameters from config -------------------------------------
 log_info("Extracting pipeline parameters ...")
@@ -401,7 +422,7 @@ log_info("Generating local YAML configuration files ...")
 build_local_config <- function(transform_method, workunit_suffix) {
   list(
     group = "G_",
-    path = file.path(target_dir, paste0("output_", workunit_suffix)),
+    path = file.path(OUT_DIR, paste0("output_", workunit_suffix)),
     zipdir_name = paste0(
       "DEA_", format(Sys.Date(), "%Y%m%d"),
       "_O", order_id, "_", workunit_suffix
@@ -430,17 +451,17 @@ build_local_config <- function(transform_method, workunit_suffix) {
 }
 
 # QC config
-qc_config_path <- file.path(target_dir, "local_config_qc.yaml")
+qc_config_path <- file.path(OUT_DIR, "local_config_qc.yaml")
 yaml::write_yaml(build_local_config("robscale", "qc"), qc_config_path)
 log_ok("Created: ", basename(qc_config_path))
 
 # DEA config — normalization: none
-dea_none_config_path <- file.path(target_dir, "local_config_dea_none.yaml")
+dea_none_config_path <- file.path(OUT_DIR, "local_config_dea_none.yaml")
 yaml::write_yaml(build_local_config("none", "dea_none"), dea_none_config_path)
 log_ok("Created: ", basename(dea_none_config_path))
 
 # DEA config — normalization: robscale
-dea_robscale_config_path <- file.path(target_dir, "local_config_dea_robscale.yaml")
+dea_robscale_config_path <- file.path(OUT_DIR, "local_config_dea_robscale.yaml")
 yaml::write_yaml(build_local_config("robscale", "dea_robscale"), dea_robscale_config_path)
 log_ok("Created: ", basename(dea_robscale_config_path))
 
@@ -452,7 +473,7 @@ log_info("STEP 1 COMPLETE")
 # ==============================================================================
 log_section("STEP 2: QC (CMD_QUANT_QC.R)")
 
-qc_outdir <- file.path(target_dir, "output_qc")
+qc_outdir <- file.path(OUT_DIR, "output_qc")
 ensure_output_dir(qc_outdir, "QC")
 
 qc_args <- paste(
@@ -476,7 +497,7 @@ log_section("STEP 3: DEA (CMD_DEA.R) — Dual Run")
 # ---- 3a. DEA Run 1: transform = none ----------------------------------------
 log_info("DEA Run 1: Normalization = NONE")
 
-dea_none_outdir <- file.path(target_dir, "output_dea_none")
+dea_none_outdir <- file.path(OUT_DIR, "output_dea_none")
 ensure_output_dir(dea_none_outdir, "DEA (none)")
 
 dea_none_args <- paste(
@@ -494,7 +515,7 @@ fix_html_links(dea_none_outdir, "DEA none")
 # ---- 3b. DEA Run 2: transform = robscale ------------------------------------
 log_info("DEA Run 2: Normalization = ROBSCALE")
 
-dea_robscale_outdir <- file.path(target_dir, "output_dea_robscale")
+dea_robscale_outdir <- file.path(OUT_DIR, "output_dea_robscale")
 ensure_output_dir(dea_robscale_outdir, "DEA (robscale)")
 
 dea_robscale_args <- paste(
@@ -532,7 +553,7 @@ if (!file.exists(export_script)) {
   log_warn("Place it next to run_pipeline.R to enable exploreDE .rds generation.")
 } else {
   log_ok("Found: ", export_script)
-  export_args <- shQuote(target_dir)
+  export_args <- paste(shQuote(target_dir), shQuote(OUT_DIR))
   run_rscript(export_script, export_args, "STEP 3c: ExploreDE Export")
 }
 
@@ -574,9 +595,11 @@ log_info("STEP 4 COMPLETE")
 # PIPELINE COMPLETE
 # ==============================================================================
 log_section("AP-MS Pipeline — All Steps Completed!")
-log_info("All output is in: ", target_dir)
+log_info("Input data:    ", target_dir)
+log_info("All output in: ", OUT_DIR)
 cat("\n")
-cat("  Output directories:\n")
+cat("  Results directory: ", OUT_DIR, "\n")
+cat("  Output subdirectories:\n")
 cat("    output_qc/                    QC reports (protein abundances, sample size)\n")
 cat("    output_dea_none/              DEA results (no normalization)\n")
 cat("    output_dea_robscale/          DEA results (robscale normalization)\n")

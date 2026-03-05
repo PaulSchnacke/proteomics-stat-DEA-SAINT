@@ -400,7 +400,7 @@ ui <- fluidPage(
                 # Config
                 div(
                     class = "upload-slot",
-                    div(class = "slot-label", "Config (.yaml)"),
+                    div(class = "slot-label", "Config (.yaml) — Optional"),
                     fileInput("config_file", NULL,
                         accept = c(".yaml", ".yml"),
                         placeholder = "config.yaml"
@@ -792,10 +792,7 @@ server <- function(input, output, session) {
             showNotification("Please upload a dataset annotation (.csv).", type = "error")
             return()
         }
-        if (is.null(input$config_file)) {
-            showNotification("Please upload a config.yaml.", type = "error")
-            return()
-        }
+        # Config upload is optional — pipeline will auto-generate defaults
         if (is.null(input$fasta_files)) {
             showNotification("Please upload at least one FASTA file.", type = "error")
             return()
@@ -829,10 +826,14 @@ server <- function(input, output, session) {
         file.copy(input$dataset_file$datapath, dataset_dest, overwrite = TRUE)
         log_to_console(paste0("  \u2713 Dataset: ", input$dataset_file$name))
 
-        # Config
-        config_dest <- file.path(target, "config.yaml")
-        file.copy(input$config_file$datapath, config_dest, overwrite = TRUE)
-        log_to_console(paste0("  \u2713 Config: config.yaml"))
+        # Config (optional — pipeline auto-generates defaults if missing)
+        if (!is.null(input$config_file)) {
+            config_dest <- file.path(target, "config.yaml")
+            file.copy(input$config_file$datapath, config_dest, overwrite = TRUE)
+            log_to_console(paste0("  \u2713 Config: config.yaml"))
+        } else {
+            log_to_console("  \u2139 Config: not uploaded (pipeline will use defaults)")
+        }
 
         # FASTA files — merge if multiple
         fasta_info <- input$fasta_files
@@ -858,15 +859,97 @@ server <- function(input, output, session) {
             ))
         }
 
-        # -- Apply sample design (CONTROL assignments + exclusions) --
+        # -- Apply sample design: validate, filter, write dataset.csv -----------
         log_to_console("")
         log_to_console("[INFO] Applying experimental design to dataset...")
-        tryCatch(
-            apply_sample_design(dataset_dest),
-            error = function(e) {
-                log_to_console(paste0("[WARN] Could not apply design: ", e$message))
+
+        if (!is.null(rv$sample_design)) {
+            sd <- rv$sample_design
+
+            # Extract only included samples
+            included_sd <- sd[sd$Include == TRUE, ]
+
+            # VALIDATION: Must have at least one C and one T
+            n_ctrl <- sum(included_sd$CONTROL == "C")
+            n_test <- sum(included_sd$CONTROL == "T")
+
+            if (n_ctrl == 0 || n_test == 0) {
+                msg <- paste0(
+                    "Design validation failed: need at least 1 Control (C) ",
+                    "and 1 Treatment (T). Currently: ",
+                    n_ctrl, " controls, ", n_test, " treatments."
+                )
+                showNotification(msg, type = "error", duration = 10)
+                log_to_console(paste0("[ERROR] ", msg))
+                rv$status <- "idle"
+                return()
             }
-        )
+
+            # Read the original CSV and apply edits
+            df <- read.csv(dataset_dest, stringsAsFactors = FALSE)
+
+            # Build sample identifiers for matching
+            # IMPORTANT: priority must match observeEvent(input$dataset_file)
+            # which checks Name first, then Relative.Path
+            if ("Name" %in% colnames(df)) {
+                df$.sample_key <- df$Name
+            } else if ("Relative.Path" %in% colnames(df)) {
+                df$.sample_key <- gsub("^x|.d.zip$|.raw$", "",
+                    basename(df$Relative.Path))
+            } else {
+                df$.sample_key <- paste0("Sample_", seq_len(nrow(df)))
+            }
+
+            # Drop excluded samples
+            excluded <- sd$Sample[sd$Include == FALSE]
+            if (length(excluded) > 0) {
+                df <- df[!df$.sample_key %in% excluded, , drop = FALSE]
+                log_to_console(paste0(
+                    "[INFO] Excluded ", length(excluded),
+                    " samples: ", paste(excluded, collapse = ", ")
+                ))
+            }
+
+            # Overwrite CONTROL column with user's explicit assignments
+            m <- match(df$.sample_key, included_sd$Sample)
+            df$CONTROL <- ifelse(is.na(m), "T", included_sd$CONTROL[m])
+
+            # Ensure G_ column exists
+            if (!"G_" %in% colnames(df)) {
+                gv_col <- NULL
+                for (col in colnames(df)) {
+                    if (tolower(col) %in% c("grouping.var",
+                        "grouping_var", "groupingvar")) {
+                        gv_col <- col
+                        break
+                    }
+                }
+                if (!is.null(gv_col)) {
+                    df[[gv_col]] <- make.names(df[[gv_col]])
+                    df$G_ <- df[[gv_col]]
+                    log_to_console(paste0(
+                        "[INFO] Created G_ column from ", gv_col,
+                        " (sanitized with make.names)"
+                    ))
+                }
+            } else {
+                # G_ already exists — sanitize it
+                df$G_ <- make.names(df$G_)
+            }
+
+            # Remove temp key column and write
+            df$.sample_key <- NULL
+            write.csv(df, dataset_dest, row.names = FALSE, quote = FALSE)
+
+            log_to_console(paste0(
+                "[INFO] Saved dataset.csv: ",
+                sum(df$CONTROL == "C"), " controls, ",
+                sum(df$CONTROL == "T"), " treatments, ",
+                nrow(df), " total samples"
+            ))
+        } else {
+            log_to_console("[WARN] No sample design table — dataset.csv used as-is")
+        }
 
         # -- Write GUI parameters for downstream scripts --
         gui_params <- list(

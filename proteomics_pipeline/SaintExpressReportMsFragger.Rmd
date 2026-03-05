@@ -22,6 +22,8 @@ library(DT)
 library(ggraph)
 library(igraph)
 library(prolfqua)
+library(plotly)
+library(htmlwidgets)
 SEP <- params$sep
 sp_string <- if (SEP$spc) {"spectral counts"} else {"intensities"}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
@@ -155,7 +157,7 @@ prot_annot <- dplyr::rename(SEP$prot_annot, Prey=protein)
 prot_annot <- dplyr::inner_join(prot_annot, datax,multiple = "all")
 bb <- prot_annot %>% dplyr::select(Prey, description, Bait, BFDR )
 bb <- bb |> tidyr::pivot_wider(names_from = "Bait", names_prefix = "BFDR.", values_from = BFDR)
-bb <- crosstalk::SharedData$new(as.data.frame(bb), ~Prey, group = "Choose protein")
+bb <- crosstalk::SharedData$new(as.data.frame(bb), ~Prey, group = "Choose_protein")
 DT::datatable(bb, filter = "bottom", options = list(pageLength = 5))
 
 ```
@@ -169,7 +171,7 @@ xd <- prolfqua::volcano_plotly(
   contrast = "Bait",
   xintercept =  log2(SEP$FCthreshold),
   yintercept = SEP$FDRthreshold,
-  title_size = 10, group = "Choose protein")
+  title_size = 10, group = "Choose_protein")
 
 xd <- lapply(xd, plotly::highlight , off = "plotly_doubleclick")
 nrow <- ceiling(length(xd) / 4)
@@ -206,7 +208,7 @@ isSig <- nrow(SEP$sig) > 0
 
 
 ```{r SigPrey, eval=isSig, fig.cap= "Candidate list."}
-sig <- crosstalk::SharedData$new(as.data.frame(SEP$sig), ~Prey, group = "Choose protein")
+sig <- crosstalk::SharedData$new(as.data.frame(SEP$sig), ~Prey, group = "Choose_protein")
 DT::datatable(sig)
 ```
 
